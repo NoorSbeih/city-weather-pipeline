@@ -80,8 +80,12 @@ def create_app() -> FastAPI:
 
     @app.get("/cities", response_model=list[CitySummary])
     def cities() -> list[dict[str, Any]]:
-        with get_conn() as conn:
-            rows = queries.list_cities(conn)
+        try:
+            with get_conn() as conn:
+                rows = queries.list_cities(conn)
+        except psycopg.Error:
+            # Empty DB / migrations not applied yet — still list registry cities.
+            rows = []
         # Include registry cities that have not been ingested yet.
         present = {r["city_id"] for r in rows}
         for city_id, city in CITIES.items():
@@ -101,7 +105,6 @@ def create_app() -> FastAPI:
                 )
         rows.sort(key=lambda r: r["name"])
         return rows
-
     @app.get("/cities/{city_id}/latest", response_model=DailyMetrics)
     def city_latest(city_id: str) -> dict[str, Any]:
         _require_known_city(city_id)
