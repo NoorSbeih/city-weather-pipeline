@@ -31,10 +31,6 @@ weather-pipeline = "weather_pipeline.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/weather_pipeline"]
-
-[tool.hatch.build.targets.wheel.force-include]
-"src/weather_pipeline/sql" = "weather_pipeline/sql"
-"src/weather_pipeline/static" = "weather_pipeline/static"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra -m 'not integration'"
