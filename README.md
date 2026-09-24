@@ -10,6 +10,8 @@ functions into an analytics table in PostgreSQL, all orchestrated by Prefect.
 > Live: https://city-weather-api-j05r.onrender.com (dashboard `/`, docs `/docs`)
 > Free Render instances sleep after idle (~50s cold start).
 
+[![Demo: city picker → chart + latest days](docs/demo.gif)](https://city-weather-api-j05r.onrender.com)
+
 ## Architecture
 
 ```mermaid
@@ -207,7 +209,7 @@ tests/             unit tests (mocked HTTP/API) + tests/integration (real Postgr
 - [x] Minimal UI (chart and table)
 - [x] Deploy: Render Postgres + Docker API
 - [x] First production backfill + GitHub Actions `DATABASE_URL` secret
-- [ ] Demo GIF here
+- [x] Demo GIF here
 
 ## License
 
