@@ -5,7 +5,7 @@ A production-shaped batch data pipeline: daily historical weather for world citi
 landed verbatim, validated, upserted into a typed staging layer, and transformed with SQL window
 functions into an analytics table in PostgreSQL, all orchestrated by Prefect.
 
-> Status: v0.2 — live API on Render; first production ingest still pending.
+> Status: **v1 live** — 8 cities, Prefect-shaped ingest, FastAPI + dashboard, Render Postgres/API, daily GHA cron.
 > Repo: https://github.com/NoorSbeih/city-weather-pipeline
 > Live: https://city-weather-api-j05r.onrender.com (dashboard `/`, docs `/docs`)
 > Free Render instances sleep after idle (~50s cold start).
@@ -206,7 +206,7 @@ tests/             unit tests (mocked HTTP/API) + tests/integration (real Postgr
 - [x] FastAPI read API (`/health`, `/cities`, `/cities/{id}/latest`, `/cities/{id}/timeseries`)
 - [x] Minimal UI (chart and table)
 - [x] Deploy: Render Postgres + Docker API
-- [ ] First production backfill + GitHub Actions `DATABASE_URL` secret
+- [x] First production backfill + GitHub Actions `DATABASE_URL` secret
 - [ ] Demo GIF here
 
 ## License
