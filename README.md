@@ -5,8 +5,9 @@ A production-shaped batch data pipeline: daily historical weather for world citi
 landed verbatim, validated, upserted into a typed staging layer, and transformed with SQL window
 functions into an analytics table in PostgreSQL, all orchestrated by Prefect.
 
-> Status: v0.2 — 8 cities, Prefect ingest, FastAPI read API + dashboard. Deploy still pending.
-> Next: managed Postgres + API host, scheduled cloud run, live URL in this README.
+> Status: v0.2 — 8 cities, Prefect ingest, FastAPI + dashboard. GitHub + cloud deploy in progress.
+> Repo: https://github.com/NoorSbeih/city-weather-pipeline
+> Next: push (needs `workflow` GitHub scope) → Render Blueprint → set `DATABASE_URL` secret → live URL here.
 
 ## Architecture
 
@@ -140,6 +141,19 @@ WHERE city_id = 'madrid'
 ORDER BY date DESC
 LIMIT 10;
 ```
+
+## Deploy (Render + GitHub Actions)
+
+1. **Push** this repo to GitHub (needs a token with the `workflow` scope so Actions files can upload).
+2. **Blueprint:** open [Render → New → Blueprint](https://dashboard.render.com/select-repo?type=blueprint),
+   select `NoorSbeih/city-weather-pipeline`, apply `render.yaml` (free Postgres + Docker API).
+3. Copy the Postgres **Internal** or **External** connection string from Render.
+4. In GitHub → Settings → Secrets → Actions, add `DATABASE_URL` = that connection string
+   (use the **external** URL for Actions runners).
+5. Run **Actions → Ingest → Run workflow** once to backfill. Cron then runs daily at 06:10 UTC.
+6. Open the Render web service URL; put it in this README under Status.
+
+Local Prefect `serve` remains the preferred local scheduler; Actions is the free cloud interim.
 
 ## Tests
 
