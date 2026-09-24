@@ -32,6 +32,17 @@ def _cmd_serve(args: argparse.Namespace) -> None:
     ingest_daily_weather.serve(name="daily", cron=args.cron)
 
 
+def _cmd_api(args: argparse.Namespace) -> None:
+    import uvicorn
+
+    uvicorn.run(
+        "weather_pipeline.api:app",
+        host=args.host,
+        port=args.port,
+        reload=args.reload,
+    )
+
+
 def main(argv: list[str] | None = None) -> None:
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
@@ -52,6 +63,12 @@ def main(argv: list[str] | None = None) -> None:
     serve = sub.add_parser("serve", help="long-running process that runs the flow on a cron")
     serve.add_argument("--cron", default=DEFAULT_CRON, help=f"default: '{DEFAULT_CRON}' (UTC)")
     serve.set_defaults(func=_cmd_serve)
+
+    api = sub.add_parser("api", help="serve the FastAPI read API + dashboard")
+    api.add_argument("--host", default="127.0.0.1")
+    api.add_argument("--port", type=int, default=8000)
+    api.add_argument("--reload", action="store_true")
+    api.set_defaults(func=_cmd_api)
 
     args = parser.parse_args(argv)
     args.func(args)

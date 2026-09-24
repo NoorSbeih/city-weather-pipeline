@@ -1,0 +1,13 @@
+.dockerignore
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.pgdata/
+.git/
+.env
+*.egg-info/
+.coverage
+htmlcov/

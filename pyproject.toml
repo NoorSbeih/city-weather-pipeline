@@ -16,6 +16,8 @@ dependencies = [
     "pydantic>=2.6,<3",
     "pydantic-settings>=2.2,<3",
     "prefect>=2.19,<3",
+    "fastapi>=0.115,<1",
+    "uvicorn[standard]>=0.30,<1",
 ]
 
 [project.optional-dependencies]
@@ -30,6 +32,9 @@ weather-pipeline = "weather_pipeline.cli:main"
 [tool.hatch.build.targets.wheel]
 packages = ["src/weather_pipeline"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"src/weather_pipeline/sql" = "weather_pipeline/sql"
+"src/weather_pipeline/static" = "weather_pipeline/static"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra -m 'not integration'"

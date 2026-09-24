@@ -5,8 +5,8 @@ A production-shaped batch data pipeline: daily historical weather for world citi
 landed verbatim, validated, upserted into a typed staging layer, and transformed with SQL window
 functions into an analytics table in PostgreSQL, all orchestrated by Prefect.
 
-> Status: v0.1: ingest → Postgres → curated SQL for one city, wrapped in a Prefect flow.
-> Next: more cities, read API, dashboard, deployment.
+> Status: v0.2 — 8 cities, Prefect ingest, FastAPI read API + dashboard. Deploy still pending.
+> Next: managed Postgres + API host, scheduled cloud run, live URL in this README.
 
 ## Architecture
 
@@ -18,9 +18,12 @@ flowchart LR
     D -->|bad rows| Q[(raw.rejected_daily_rows)]
     D -->|COPY + upsert| E[(staging.daily_weather<br/>1 row / city / day)]
     E -->|SQL: CTEs + window functions| F[(curated.daily_city_stats<br/>rolling 7d/30d, anomalies)]
+    F --> G[FastAPI read API]
+    G --> H[HTML dashboard]
     P{{Prefect flow<br/>cron schedule}} -.orchestrates.-> B
 ```
 
+Cities in the registry: Madrid, Barcelona, London, Berlin, New York, Tokyo, São Paulo, Cairo.
 | Layer | Table | Purpose |
 |---|---|---|
 | raw | `open_meteo_responses` | Exact API payloads (JSONB) + request params, deduplicated by content hash. Replayable. |
@@ -62,7 +65,16 @@ pip install -e ".[dev]"
 cp .env.example .env
 ```
 
-**Start Postgres, option A (Docker):**
+**Start Postgres + API with Docker:**
+
+```bash
+docker compose up -d --build
+# API: http://127.0.0.1:8000  ·  docs: http://127.0.0.1:8000/docs
+# Still run the pipeline from the host (or a one-shot worker later):
+weather-pipeline run
+```
+
+**Start Postgres, option A (Docker, DB only):**
 
 ```bash
 docker compose up -d postgres
@@ -85,6 +97,22 @@ weather-pipeline run --city madrid --start 2024-07-01 --end 2024-07-31   # expli
 
 The first run backfills from 2024-01-01 (about 1,000 days per city, one API call). Running it again
 immediately only refetches the overlap window and reports `unchanged` rows.
+
+**Serve the read API + dashboard:**
+
+```bash
+weather-pipeline api                  # http://127.0.0.1:8000
+weather-pipeline api --port 8000 --reload
+```
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/health` | Liveness + DB ping |
+| GET | `/cities` | City list with latest date / day count |
+| GET | `/cities/{id}/latest` | Most recent curated metrics |
+| GET | `/cities/{id}/timeseries` | `?start=&end=&limit=` (default last 90 days) |
+| GET | `/` | Minimal chart + table UI |
+| GET | `/docs` | OpenAPI |
 
 **Run on a schedule (Prefect deployment):**
 
@@ -146,19 +174,22 @@ src/weather_pipeline/
   validate.py      schema + row validation (pydantic)
   load.py          raw landing, COPY + upsert into staging
   transform.py     runs curated SQL
+  queries.py       curated-layer SQL for the API
+  api.py           FastAPI app
   flows.py         Prefect flow and tasks
   cli.py           `weather-pipeline` entry point
+  static/          minimal dashboard (HTML/CSS/JS + Chart.js)
   sql/migrations/  forward-only schema migrations
   sql/transforms/  curated-layer SQL
-tests/             unit tests (mocked HTTP) + tests/integration (real Postgres)
+tests/             unit tests (mocked HTTP/API) + tests/integration (real Postgres)
 ```
 
 ## Roadmap
 
 - [x] Ingest → raw/staging/curated for one city, Prefect flow, tests, CI
-- [ ] 5–10 cities
-- [ ] FastAPI read API (`/health`, `/cities`, `/cities/{id}/latest`, `/cities/{id}/timeseries`)
-- [ ] Minimal UI (chart and table)
+- [x] 8 cities
+- [x] FastAPI read API (`/health`, `/cities`, `/cities/{id}/latest`, `/cities/{id}/timeseries`)
+- [x] Minimal UI (chart and table)
 - [ ] Deploy: managed Postgres, API host, and a scheduled run
 - [ ] Live URL + demo GIF here
 

@@ -15,5 +15,15 @@ services:
       timeout: 3s
       retries: 10
 
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql://weather:weather@postgres:5432/weather
+    depends_on:
+      postgres:
+        condition: service_healthy
+
 volumes:
   pgdata:
