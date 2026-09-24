@@ -105,6 +105,7 @@ def create_app() -> FastAPI:
                 )
         rows.sort(key=lambda r: r["name"])
         return rows
+
     @app.get("/cities/{city_id}/latest", response_model=DailyMetrics)
     def city_latest(city_id: str) -> dict[str, Any]:
         _require_known_city(city_id)
