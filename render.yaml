@@ -1,0 +1,22 @@
+# Render Blueprint: one Postgres + one web service for the read API.
+# Deploy: https://dashboard.render.com/select-repo?type=blueprint
+# After first deploy, run ingest once (GitHub Action "Ingest" or locally against DATABASE_URL).
+
+databases:
+  - name: city-weather-db
+    plan: free
+    databaseName: weather
+    user: weather
+
+services:
+  - type: web
+    name: city-weather-api
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: city-weather-db
+          property: connectionString

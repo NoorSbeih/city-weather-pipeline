@@ -1,0 +1,28 @@
+name: Ingest
+
+on:
+  schedule:
+    # Daily 06:10 UTC — after typical Open-Meteo archive lag window.
+    - cron: "10 6 * * *"
+  workflow_dispatch:
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Require DATABASE_URL
+        run: |
+          if [ -z "$DATABASE_URL" ]; then
+            echo "Set repository secret DATABASE_URL to the deployed Postgres URL."
+            exit 1
+          fi
+      - run: pip install -e .
+      - name: Run pipeline
+        run: weather-pipeline run
