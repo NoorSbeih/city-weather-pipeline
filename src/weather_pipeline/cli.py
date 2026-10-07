@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import argparse
-import logging
 from datetime import date
 
 from weather_pipeline.cities import CITIES
+from weather_pipeline.logging_config import configure_logging
 
 DEFAULT_CRON = "0 6 * * *"
 
@@ -13,7 +13,7 @@ def _cmd_init_db(_: argparse.Namespace) -> None:
     from weather_pipeline import db, load
     from weather_pipeline.config import get_settings
 
-    with db.connect(get_settings().database_url) as conn:
+    with db.connect(get_settings().connection_url) as conn:
         applied = db.apply_migrations(conn)
         with conn.transaction():
             load.upsert_cities(conn, CITIES.values())
@@ -21,9 +21,12 @@ def _cmd_init_db(_: argparse.Namespace) -> None:
 
 
 def _cmd_run(args: argparse.Namespace) -> None:
-    from weather_pipeline.flows import ingest_daily_weather
+    from weather_pipeline.job import run_once
 
-    ingest_daily_weather(city_ids=args.city, start_date=args.start, end_date=args.end)
+    try:
+        run_once(city_ids=args.city, start_date=args.start, end_date=args.end)
+    except Exception:
+        raise SystemExit(1) from None
 
 
 def _cmd_serve(args: argparse.Namespace) -> None:
@@ -44,9 +47,7 @@ def _cmd_api(args: argparse.Namespace) -> None:
 
 
 def main(argv: list[str] | None = None) -> None:
-    logging.basicConfig(
-        level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
-    )
+    configure_logging()
     parser = argparse.ArgumentParser(prog="weather-pipeline")
     sub = parser.add_subparsers(dest="command", required=True)
 

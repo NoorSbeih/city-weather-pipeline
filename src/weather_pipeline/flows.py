@@ -44,7 +44,7 @@ def plan_window(
 @task
 def prepare_database(city_ids: list[str]) -> list[str]:
     settings = get_settings()
-    with db.connect(settings.database_url) as conn:
+    with db.connect(settings.connection_url) as conn:
         applied = db.apply_migrations(conn)
         with conn.transaction():
             load.upsert_cities(conn, [get_city(c) for c in city_ids])
@@ -58,7 +58,7 @@ def plan_city_window(
     settings = get_settings()
     if start_date and end_date:
         return (start_date, end_date)
-    with db.connect(settings.database_url) as conn:
+    with db.connect(settings.connection_url) as conn:
         watermark = load.get_watermark(conn, city_id)
     window = plan_window(watermark, date.today(), settings)
     if window is None:
@@ -81,7 +81,7 @@ def extract_city(city_id: str, start_date: date, end_date: date) -> RawResponse:
 @task
 def land_raw(response: RawResponse) -> int:
     """Persist the payload before validating it, so a schema break is still replayable."""
-    with db.connect(get_settings().database_url) as conn, conn.transaction():
+    with db.connect(get_settings().connection_url) as conn, conn.transaction():
         return load.insert_raw_response(conn, response)
 
 
@@ -92,14 +92,14 @@ def validate_response(response: RawResponse) -> ValidationResult:
 
 @task
 def load_staging(result: ValidationResult, response_id: int) -> load.StagingLoadStats:
-    with db.connect(get_settings().database_url) as conn, conn.transaction():
+    with db.connect(get_settings().connection_url) as conn, conn.transaction():
         load.insert_rejections(conn, result.rejected, response_id)
         return load.upsert_daily_weather(conn, result.rows, response_id)
 
 
 @task
 def refresh_curated(city_ids: list[str]) -> int:
-    with db.connect(get_settings().database_url) as conn, conn.transaction():
+    with db.connect(get_settings().connection_url) as conn, conn.transaction():
         return transform.refresh_daily_city_stats(conn, city_ids)
 
 

@@ -23,7 +23,7 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 @contextmanager
 def get_conn() -> Iterator[psycopg.Connection]:
-    with psycopg.connect(get_settings().database_url) as conn:
+    with psycopg.connect(get_settings().connection_url) as conn:
         yield conn
 
 

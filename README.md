@@ -1,13 +1,16 @@
 # city-weather-pipeline
 
+**Open-Meteo → Cloud Run job (Prefect flow) → Cloud SQL (raw/staging/curated) → Cloud Run API → dashboard, triggered by Cloud Scheduler.**
+
 A production-shaped batch data pipeline: daily historical weather for world cities is pulled from the
 [Open-Meteo archive API](https://open-meteo.com/en/docs/historical-weather-api) on a schedule,
 landed verbatim, validated, upserted into a typed staging layer, and transformed with SQL window
-functions into an analytics table in PostgreSQL, all orchestrated by Prefect.
+functions into an analytics table in PostgreSQL, all orchestrated by Prefect. The schema is unchanged;
+Google Cloud is the deployment target.
 
-> Status: **v1 live** — 8 cities, Prefect-shaped ingest, FastAPI + dashboard, Render Postgres/API, daily GHA cron.
+> Status: pipeline logic is unchanged. GCP deploy commands are below. The public demo is still Render until you create Cloud SQL.
 > Repo: https://github.com/NoorSbeih/city-weather-pipeline
-> Live: https://city-weather-api-j05r.onrender.com (dashboard `/`, docs `/docs`)
+> Live (Render): https://city-weather-api-j05r.onrender.com (dashboard `/`, docs `/docs`)
 > Free Render instances sleep after idle (~50s cold start).
 
 [![Demo: city picker → chart + latest days](docs/demo.gif)](https://city-weather-api-j05r.onrender.com)
@@ -145,7 +148,220 @@ ORDER BY date DESC
 LIMIT 10;
 ```
 
+## Deploy on Google Cloud
+
+Same image for the API and the ingest job. Cloud Run mounts a Cloud SQL unix socket at
+`/cloudsql/PROJECT:REGION:INSTANCE`. The app builds the connection string from
+`CLOUD_SQL_CONNECTION_NAME`, `DB_USER`, `DB_PASSWORD`, and `DB_NAME` (see `connection_url` in
+`config.py`). `DATABASE_URL` is still used for local Postgres and the Auth Proxy.
+
+Schema, Prefect tasks, and the dashboard are unchanged. The job command is `weather-pipeline run`
+(or `python -m weather_pipeline.job`): one Prefect flow execution, then the process exits.
+Cloud Scheduler calls that job daily at 06:10 UTC, matching the previous cron.
+
+Replace the placeholders, then run the blocks in order. These commands assume bash (Google Cloud Shell is the
+straightforward place if `gcloud` is not installed locally). Region `europe-west1` is a cheap EU default;
+pick one region and use it everywhere.
+
+```bash
+export PROJECT_ID="your-gcp-project"
+export REGION="europe-west1"
+export INSTANCE="city-weather-pg"
+export REPO="weather"
+export IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO}/city-weather-pipeline:latest"
+
+gcloud config set project "$PROJECT_ID"
+gcloud services enable \
+  sqladmin.googleapis.com \
+  run.googleapis.com \
+  artifactregistry.googleapis.com \
+  cloudbuild.googleapis.com \
+  cloudscheduler.googleapis.com \
+  secretmanager.googleapis.com
+```
+
+### 1. Cloud SQL for PostgreSQL (smallest shared-core tier)
+
+Zonal `db-f1-micro`, 10 GB HDD, no high availability. Public IP is on so Cloud Run can use the
+built-in Cloud SQL connector **without** a VPC connector (a VPC connector is a separate always-on charge).
+Do not add `0.0.0.0/0` to authorized networks; Cloud Run authenticates with IAM, not a public port.
+
+```bash
+gcloud sql instances create "$INSTANCE" \
+  --database-version=POSTGRES_16 \
+  --edition=enterprise \
+  --tier=db-f1-micro \
+  --region="$REGION" \
+  --availability-type=zonal \
+  --storage-size=10GB \
+  --root-password="$(openssl rand -base64 24)"
+
+gcloud sql databases create weather --instance="$INSTANCE"
+
+# Password is only in Secret Manager, not in git.
+export DB_PASSWORD="$(openssl rand -base64 24)"
+gcloud sql users create weather \
+  --instance="$INSTANCE" \
+  --password="$DB_PASSWORD"
+
+printf '%s' "$DB_PASSWORD" | gcloud secrets create db-password --data-file=-
+```
+
+Connection name (used as the socket directory):
+
+```bash
+export SQL_CONN="${PROJECT_ID}:${REGION}:${INSTANCE}"
+echo "$SQL_CONN"
+```
+
+On a laptop, skip the socket and use the Auth Proxy instead. Leave `CLOUD_SQL_CONNECTION_NAME` unset
+and point `DATABASE_URL` at `127.0.0.1`:
+
+```bash
+# https://cloud.google.com/sql/docs/postgres/sql-proxy
+cloud-sql-proxy "$SQL_CONN"
+# other terminal:
+export DATABASE_URL="postgresql://weather:${DB_PASSWORD}@127.0.0.1:5432/weather"
+weather-pipeline run
+```
+
+### 2. Build and push the image
+
+```bash
+gcloud artifacts repositories create "$REPO" \
+  --repository-format=docker \
+  --location="$REGION" \
+  --description="city-weather-pipeline"
+
+gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+gcloud builds submit --tag "$IMAGE"
+```
+
+### 3. Service account
+
+```bash
+gcloud iam service-accounts create weather-runner \
+  --display-name="city-weather Cloud Run runtime"
+
+export RUNNER="weather-runner@${PROJECT_ID}.iam.gserviceaccount.com"
+
+gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+  --member="serviceAccount:${RUNNER}" \
+  --role="roles/cloudsql.client"
+
+gcloud secrets add-iam-policy-binding db-password \
+  --member="serviceAccount:${RUNNER}" \
+  --role="roles/secretmanager.secretAccessor"
+```
+
+### 4. Cloud Run API
+
+Listens on `$PORT` (Cloud Run sets 8080). `--min-instances=0` so idle time is not billed as instances.
+
+```bash
+gcloud run deploy city-weather-api \
+  --image="$IMAGE" \
+  --region="$REGION" \
+  --service-account="$RUNNER" \
+  --allow-unauthenticated \
+  --port=8080 \
+  --min-instances=0 \
+  --max-instances=2 \
+  --memory=512Mi \
+  --cpu=1 \
+  --add-cloudsql-instances="$SQL_CONN" \
+  --set-secrets="DB_PASSWORD=db-password:latest" \
+  --set-env-vars="CLOUD_SQL_CONNECTION_NAME=${SQL_CONN},DB_USER=weather,DB_NAME=weather"
+```
+
+### 5. Cloud Run job (Prefect flow, one execution)
+
+```bash
+gcloud run jobs deploy city-weather-ingest \
+  --image="$IMAGE" \
+  --region="$REGION" \
+  --service-account="$RUNNER" \
+  --command="weather-pipeline" \
+  --args="run" \
+  --tasks=1 \
+  --max-retries=1 \
+  --task-timeout=20m \
+  --memory=1Gi \
+  --cpu=1 \
+  --set-cloudsql-instances="$SQL_CONN" \
+  --set-secrets="DB_PASSWORD=db-password:latest" \
+  --set-env-vars="CLOUD_SQL_CONNECTION_NAME=${SQL_CONN},DB_USER=weather,DB_NAME=weather"
+
+# First backfill (about 1,000 days x 8 cities). Later runs are incremental.
+gcloud run jobs execute city-weather-ingest --region="$REGION" --wait
+```
+
+Each run logs one JSON line to stdout (`event=ingest_succeeded` or `ingest_failed`, plus inserted /
+updated / unchanged / rejected counts). Cloud Logging stores that automatically.
+
+### 6. Cloud Scheduler (daily 06:10 UTC)
+
+```bash
+gcloud iam service-accounts create weather-scheduler \
+  --display-name="city-weather scheduler"
+
+export SCHEDULER="weather-scheduler@${PROJECT_ID}.iam.gserviceaccount.com"
+
+gcloud run jobs add-iam-policy-binding city-weather-ingest \
+  --region="$REGION" \
+  --member="serviceAccount:${SCHEDULER}" \
+  --role="roles/run.invoker"
+
+gcloud scheduler jobs create http city-weather-ingest-daily \
+  --location="$REGION" \
+  --schedule="10 6 * * *" \
+  --time-zone="Etc/UTC" \
+  --uri="https://${REGION}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${PROJECT_ID}/jobs/city-weather-ingest:run" \
+  --http-method=POST \
+  --oauth-service-account-email="$SCHEDULER"
+```
+
+Trigger it once without waiting for 06:10:
+
+```bash
+gcloud scheduler jobs run city-weather-ingest-daily --location="$REGION"
+```
+
+### What keeps charging if you leave it up
+
+| Resource | Idle cost | What to do after screenshots |
+|---|---|---|
+| **Cloud SQL `db-f1-micro`** | The real bill. Roughly **$8–15/month** in a typical region, plus ~10 GB disk, even with no traffic. Backups add a little more. | Stop or delete it. This is the one that matters. |
+| Cloud SQL public IP | Small, and it goes away with the instance. | Deleted with the instance. |
+| Cloud Run API (`min-instances=0`) | About **$0** while idle. You pay for requests. | Optional delete. |
+| Cloud Run job | About **$0** until it runs. A daily ~2 minute run is cents per month. | Pause the scheduler so it stops running. |
+| Cloud Scheduler | First 3 jobs per billing account are free. | Delete the job if you want it gone. |
+| Artifact Registry | Free tier covers a small image; after that about $0.10/GB-month. | Delete the repo if you are done. |
+| Secret Manager | Negligible for one secret. | Optional delete. |
+
+Stopping Cloud SQL stops the VM charge. Disk storage can still bill until you delete the instance.
+
+```bash
+# Stop compute charges (storage may remain):
+gcloud sql instances patch "$INSTANCE" --activation-policy=NEVER
+
+# Stop the daily job:
+gcloud scheduler jobs pause city-weather-ingest-daily --location="$REGION"
+
+# Remove everything that can bill:
+gcloud scheduler jobs delete city-weather-ingest-daily --location="$REGION" --quiet
+gcloud run services delete city-weather-api --region="$REGION" --quiet
+gcloud run jobs delete city-weather-ingest --region="$REGION" --quiet
+gcloud sql instances delete "$INSTANCE" --quiet
+gcloud artifacts repositories delete "$REPO" --location="$REGION" --quiet
+```
+
+Do this after you have screenshots. A forgotten `db-f1-micro` is the usual surprise invoice.
+
 ## Deploy (Render + GitHub Actions)
+
+Earlier public demo. Prefer the Google Cloud section above for the GCP write-up. Render free
+web services sleep when idle; the GitHub Actions cron is the scheduler for that deploy.
 
 1. **Push** this repo to GitHub (needs a token with the `workflow` scope so Actions files can upload).
 2. **Blueprint:** open [Render → New → Blueprint](https://dashboard.render.com/select-repo?type=blueprint),
@@ -175,7 +391,9 @@ All settings are read from environment variables or `.env`. See `src/weather_pip
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `DATABASE_URL` | `postgresql://weather:weather@localhost:5432/weather` | Target Postgres |
+| `DATABASE_URL` | `postgresql://weather:weather@localhost:5432/weather` | Target Postgres when Cloud SQL socket vars are unset (local, Auth Proxy, Render) |
+| `CLOUD_SQL_CONNECTION_NAME` | empty | `PROJECT:REGION:INSTANCE`. When set, connect via `/cloudsql/...` |
+| `DB_USER` / `DB_PASSWORD` / `DB_NAME` | empty / empty / `weather` | Cloud SQL login. Required together with the connection name |
 | `BACKFILL_START_DATE` | `2024-01-01` | First day loaded for a new city |
 | `ARCHIVE_LAG_DAYS` | `5` | The archive trails real time; newer days are skipped |
 | `INCREMENTAL_OVERLAP_DAYS` | `3` | Days refetched before the watermark on each run |
@@ -195,6 +413,8 @@ src/weather_pipeline/
   api.py           FastAPI app
   flows.py         Prefect flow and tasks
   cli.py           `weather-pipeline` entry point
+  job.py           one-shot ingest for Cloud Run jobs
+  logging_config.py  JSON logs on stdout (Cloud Logging)
   static/          minimal dashboard (HTML/CSS/JS + Chart.js)
   sql/migrations/  forward-only schema migrations
   sql/transforms/  curated-layer SQL
@@ -210,6 +430,8 @@ tests/             unit tests (mocked HTTP/API) + tests/integration (real Postgr
 - [x] Deploy: Render Postgres + Docker API
 - [x] First production backfill + GitHub Actions `DATABASE_URL` secret
 - [x] Demo GIF here
+- [x] GCP config: Cloud SQL socket URL, Cloud Run image, Cloud Run job entrypoint, structured logs
+- [ ] Provision Cloud SQL / Cloud Run in a billed project (commands above; not created from this repo automatically)
 
 ## License
 
